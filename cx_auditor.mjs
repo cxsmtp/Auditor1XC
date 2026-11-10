@@ -22,7 +22,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const API_KEY_CLIENT_ID = "ast-app";
 const PAGE_SIZE = 100;
@@ -384,7 +384,7 @@ export async function collect(opts, progress = () => {}) {
 }
 
 // ------------------------------------------------------------------- main --
-const SECTIONS = ["audit", "admin", "events", "keys", "usage"];
+export const SECTIONS = ["audit", "admin", "events", "keys", "usage"];
 
 const HELP = `usage: node cx_auditor.mjs [options]
 
@@ -515,7 +515,23 @@ function trimForTable(r) {
   return o;
 }
 
-const invokedDirectly = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
-if (invokedDirectly) {
+/**
+ * True when the file at metaUrl is the script node was started with. Compares real
+ * paths (case-insensitively on Windows) so drive-letter case, spaces or symlinks
+ * cannot make the entry point silently do nothing.
+ */
+export function isMainModule(metaUrl) {
+  if (!process.argv[1]) return false;
+  try {
+    const norm = (p) => { const r = fs.realpathSync(p); return process.platform === "win32" ? r.toLowerCase() : r; };
+    return norm(process.argv[1]) === norm(fileURLToPath(metaUrl));
+  } catch {
+    return false;
+  }
+}
+
+// @@CLI_MAIN_START (removed from the standalone bundle)
+if (isMainModule(import.meta.url)) {
   run().then((code) => process.exit(code), (e) => { log(`error: ${e.message}`); process.exit(1); });
 }
+// @@CLI_MAIN_END

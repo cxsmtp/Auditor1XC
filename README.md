@@ -5,13 +5,22 @@ It needs **Node.js 18+** and nothing from npm.
 
 ## GUI (recommended)
 
+**Easiest: one file.** Download only `cx-auditor.mjs`, put it in any folder, and run:
+
 ```bash
-node cx_auditor_gui.mjs
+node cx-auditor.mjs
 ```
 
-or `npm start`. This opens `http://127.0.0.1:8787` in your browser. If that port is taken, it picks
-a free one and prints the URL. Use `--port 9000` to choose a port and `--no-open` to skip opening
-the browser. Stop it with Ctrl+C.
+This opens `http://127.0.0.1:8787` in your browser. If that port is taken, it picks a free one and
+prints the URL. Use `--port 9000` to choose a port and `--no-open` to skip opening the browser.
+Stop it with Ctrl+C.
+
+`cx-auditor.mjs` is generated from the sources (`cx_auditor.mjs`, `cx_auditor_gui.mjs`, `gui/`) by
+`npm run build`. If you work from the full repository instead, `npm start` runs the same GUI from the
+sources. In that case `cx_auditor_gui.mjs` needs `cx_auditor.mjs` and the `gui` folder next to it.
+
+> Behind a corporate proxy? Node only uses `HTTPS_PROXY` if you also set `NODE_USE_ENV_PROXY=1`
+> (Windows: `set NODE_USE_ENV_PROXY=1` before running).
 
 **1. Connect & fetch.**
 * Paste the API key. The page shows which tenant and region the key belongs to, and warns if the key has expired.
@@ -175,7 +184,7 @@ identity coming from an unfamiliar IP**. Look at `api_key_ips` per user in `summ
 ## Tests
 
 ```bash
-npm test
+npm test     (also checks that cx-auditor.mjs matches the sources)
 ```
 
 ```bash

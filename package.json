@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node cx_auditor_gui.mjs",
     "cli": "node cx_auditor.mjs",
-    "test": "node --test tests/cx_auditor.test.mjs tests/gui_server.test.mjs"
+    "build": "node scripts/build-standalone.mjs",
+    "test": "node --test tests/cx_auditor.test.mjs tests/gui_server.test.mjs tests/standalone.test.mjs"
   }
 }

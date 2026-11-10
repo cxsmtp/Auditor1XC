@@ -21,12 +21,20 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { parseArgs } from "node:util";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { collect, buildFilters } from "./cx_auditor.mjs";
+import { fileURLToPath } from "node:url";
+import { collect, buildFilters, SECTIONS, isMainModule } from "./cx_auditor.mjs";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const GUI_DIR = path.join(HERE, "gui");
-const SECTIONS = ["audit", "admin", "events", "keys", "usage"];
+// The standalone build replaces `null` below with the contents of gui/ so a single file runs anywhere.
+const EMBEDDED_ASSETS = null;
+const GUI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "gui");
+function readAsset(name) {
+  if (EMBEDDED_ASSETS) return EMBEDDED_ASSETS[name];
+  const file = path.join(GUI_DIR, name);
+  if (!fs.existsSync(file)) {
+    throw new Error(`missing ${file} - keep the gui folder next to cx_auditor_gui.mjs, or use the single-file cx-auditor.mjs`);
+  }
+  return fs.readFileSync(file, "utf8");
+}
 const STATIC = {
   "/app.js": ["app.js", "text/javascript; charset=utf-8"],
   "/app.css": ["app.css", "text/css; charset=utf-8"],
@@ -53,12 +61,12 @@ export function createServer({ token = crypto.randomBytes(24).toString("hex"), c
     const url = new URL(req.url, "http://localhost");
 
     if (req.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
-      const html = fs.readFileSync(path.join(GUI_DIR, "index.html"), "utf8").replace("__SESSION_TOKEN__", token);
+      const html = readAsset("index.html").replace("__SESSION_TOKEN__", token);
       return send(200, html, "text/html; charset=utf-8");
     }
     if (req.method === "GET" && STATIC[url.pathname]) {
       const [file, type] = STATIC[url.pathname];
-      return send(200, fs.readFileSync(path.join(GUI_DIR, file)), type);
+      return send(200, readAsset(file), type);
     }
 
     if (url.pathname.startsWith("/api/")) {
@@ -154,8 +162,7 @@ function openBrowser(url) {
   } catch { /* user can open the URL manually */ }
 }
 
-const invokedDirectly = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
-if (invokedDirectly) {
+if (isMainModule(import.meta.url)) {
   const { values: a } = parseArgs({
     options: { port: { type: "string", default: "8787" }, "no-open": { type: "boolean", default: false } },
   });
