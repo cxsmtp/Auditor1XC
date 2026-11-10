@@ -183,8 +183,10 @@ identity coming from an unfamiliar IP**. Look at `api_key_ips` per user in `summ
 
 ## Tests
 
+`npm test` also checks that `cx-auditor.mjs` matches the sources.
+
 ```bash
-npm test     (also checks that cx-auditor.mjs matches the sources)
+npm test
 ```
 
 ```bash
