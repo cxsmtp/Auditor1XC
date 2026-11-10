@@ -58,6 +58,7 @@
             <label><input type="checkbox" name="section" value="usage" checked> API key usage <span class="muted">who used which key, from where</span></label>
             <label><input type="checkbox" name="section" value="admin" checked> IAM admin events <span class="muted">user/role changes</span></label>
             <label><input type="checkbox" name="section" value="events" checked> IAM user events <span class="muted">logins, failures</span></label>
+            <label><input type="checkbox" name="section" value="ai" checked> AI credit usage <span class="muted">AI Triage / Remediation runs</span></label>
           </div>
         </fieldset>
 
@@ -125,7 +126,7 @@
 
     <section id="emptyState" class="card empty">
       <h2>Audit your Checkmarx One tenant</h2>
-      <p>Paste an API key above and press <b>Fetch logs</b>. Then search the audit trail, see which user created each API key, and who used it and from where.</p>
+      <p>Paste an API key above and press <b>Fetch logs</b>. Every event is turned into <b>who did what</b>: the person's name and email, whether they used the web UI, an API key (and which one) or an OAuth client, what they acted on, and how sure we are.</p>
       <p class="muted">Or use <b>Open data</b> to reopen a file you saved earlier. You can do that without an API key.</p>
     </section>
   </main>

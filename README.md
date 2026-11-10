@@ -25,11 +25,16 @@ sources. In that case `cx_auditor_gui.mjs` needs `cx_auditor.mjs` and the `gui` 
 **1. Connect & fetch.**
 * Paste the API key. The page shows which tenant and region the key belongs to, and warns if the key has expired.
 * Pick a time range: 24 h, 7, 30, 90 or 365 days, or exact dates.
-* Choose which data to fetch: audit trail, API keys, key usage, IAM admin events, IAM user events.
+* Choose which data to fetch: audit trail, API keys, key usage, IAM admin events, IAM user events, AI credit usage.
 * Press **Fetch logs**. Progress is shown live, and **Cancel** stops the fetch.
 * Advanced options: limit the API-key lookup to some users (faster on large tenants), include the legacy audit trail, or override the URLs and tenant.
 
 **2. Work on the logs.** You fetch once, then every option below works instantly on that data.
+Every row names a **person** (name and email), not an ID. Actions show **how the person
+authenticated** (browser, which API key, or which OAuth client), with a confidence level. See
+[How people, API keys and credits are connected](#how-people-api-keys-and-credits-are-connected).
+
+Tabs: **Who did what** (everything, as one timeline) · Audit trail · API keys (who created each key and what it did) · API key usage · **AI credit usage** · IAM admin events · IAM user events · People.
 
 | Feature | What it does |
 |---|---|
@@ -80,9 +85,12 @@ The tenant, IAM URL and API URL are read from the key's `iss` claim. Override th
 
 | File | Answers | Source |
 |---|---|---|
-| `audit_trail.csv` | Who did what, when, from which IP | `GET {base}/api/audit-events` (+ legacy `/api/audit` with `--legacy-audit`) |
-| `api_keys.csv` | Each API key: **which user created it**, when, last used, last IP | IAM `users/{id}/offline-sessions/{ast-app}`, `users/{id}/consents` |
-| `api_key_usage.csv` | Each use of a key: **which user used it**, the IP, and whose key it was | IAM `GET /events` (`REFRESH_TOKEN` on `ast-app`) |
+| `activity.csv` | **Everything as one timeline**: person, email, action, target, how they authenticated (API key / browser / OAuth client), confidence, evidence, IP | all of the below, joined |
+| `audit_trail.csv` | Each action with the person's name and email, target, credential used, confidence | `GET {base}/api/audit-events` (+ legacy `/api/audit` with `--legacy-audit`) |
+| `api_keys.csv` | Each API key: **who created it**, when, what it did (`actions_via_key`, `action_types`), last use and IP | IAM `users/{id}/offline-sessions/{ast-app}`, `users/{id}/consents` |
+| `ai_runs.csv` | AI Triage/Remediation runs (AI credit use), with the person whose scan likely triggered each one | `GET {base}/api/ai-agents-coordinator/history` |
+| `people.csv` | Every identity seen: name, email, username, type (user / OAuth client / deleted), ID | IAM users, clients, lookups |
+| `api_key_usage.csv` | Each use of a key: **who used it** (name, email), the IP, and whose key it was | IAM `GET /events` (`REFRESH_TOKEN` on `ast-app`) |
 | `iam_admin_events.csv` | IAM admin changes (users, roles, groups, clients) and who made them | IAM `GET /admin-events` |
 | `iam_user_events.csv` | Logins, login failures, token refreshes | IAM `GET /events` |
 | `summary.json` | Window, filters, rows fetched/matched per file, per-user rollup | |
@@ -145,39 +153,79 @@ Any audit event that mentions a project name:
 node cx_auditor.mjs --only audit --text payments-api
 ```
 
-## How "created by" and "used by" are determined
+## How people, API keys and credits are connected
 
-A Checkmarx One API key is an IAM (Keycloak) offline token for the `ast-app` client. It always
-belongs to, and acts as, the user who generated it.
+Raw Checkmarx One logs only contain IDs. The auditor joins them so that every row names a person.
 
-* **Created by**: the owner of the offline session.
-* **Used by**: the `userId` and IP on each `REFRESH_TOKEN` event, matched to the key by session ID.
+**1. Every ID becomes a person.** IDs are resolved in this order:
 
-A key that is "used by" someone other than its creator therefore shows up as **the creator's
-identity coming from an unfamiliar IP**. Look at `api_key_ips` per user in `summary.json`.
+* IAM users, with full profiles: first and last name, email, username, enabled.
+* OAuth clients. Each client acts through a service-account user, which is shown as `OAuth client: <name>`.
+* IDs IAM no longer returns are looked up one by one. A 404 marks the user `(deleted)`. Any
+  name or email found for that ID in event payloads is kept, so deleted users still have a name.
+* Anything left is shown as `unknown user <id>` and flagged on the Overview.
+
+**2. How each action was authenticated.** Checkmarx One access tokens expire after 30 minutes
+(Authentication API). So an action at time *t* was made with a token the user received in the
+30 minutes before *t*. The auditor reads that user's IAM token events in that window:
+
+| Token event in the window | Shown as |
+|---|---|
+| Refresh of an offline session (= an API key) | **API key** + which key |
+| Interactive `LOGIN` / browser session | **Browser sign-in** |
+| `CLIENT_LOGIN`, or the actor is a service account | **OAuth client** |
+
+Every attribution has a **confidence** and a **"How we know"** text:
+
+| Confidence | Meaning |
+|---|---|
+| confirmed | The actor is an OAuth client's service account; there is only one way it can act |
+| high | Exactly one credential issued tokens to this person in the window, from the action's IP |
+| medium | Exactly one credential in the window, but from a different IP |
+| low | Several credentials were active; the most recent before the action is shown, and the others are listed |
+| none | No token events in the window: IAM event saving is off, or the event is older than its retention |
+
+As a result, **API keys** shows, for each key: who created it, when, what it was used for (number
+and types of actions), and when it was last used. **Who did what** shows each action with the
+person, their email and the key they used.
+
+**3. AI credit usage.** AI Triage and AI Remediation consume "Checkmarx Assist / AI credits". The
+AI Agents Coordinator history (`/api/ai-agents-coordinator/history`) lists each run with project,
+status and findings processed. It does **not** say who started a run or how many credits it used.
+Each run is linked to the most recent scan of the same project in the 24 hours before it, and so
+to that scan's person and credential. These links are labelled **likely**. Runs with no matching
+scan, such as scheduled scans, are shown as not attributed.
+
+**4. Who did what.** One timeline merges the audit trail, API key creation and use, sign-ins,
+IAM admin changes and AI runs. Each row has: person · email · action · target (project names and
+affected people resolved) · how they authenticated · confidence · IP.
 
 ## Limitations (please read)
 
 * **Not yet run against a live tenant.** Every endpoint was checked against the Checkmarx One API
-  reference, and the tests run the full flow against a mock server. Real responses may still differ.
-  If a section fails, `summary.json` shows the HTTP status.
-* **The audit trail has no "API key created" event.** The documented audit-events list doesn't
-  include one. That is why key data comes from the IAM admin API.
+  reference, and the tests run the full flow against mock tenants. Real responses may still differ.
+  If a section fails, the Overview (or `summary.json`) shows which one and the HTTP status.
+* **Credential attribution needs IAM event saving.** If IAM event saving is off in the realm, or
+  its retention is shorter than your time range, people are still named, but "Authenticated via"
+  is `unknown` (confidence `none`). The Overview shows the share of events that could be attributed.
+* **API keys act as their owner.** In Checkmarx One a key always acts as the user who created it.
+  A key used by someone else therefore shows up as its owner acting from an unfamiliar IP. The
+  "used from N IPs" finding and the per-key IP list are how to spot that.
+* **Credits:** the API exposes no credit balance and no credits per run. "Findings processed" is
+  the closest available measure. Manual AI requests made in the UI aren't in the documented
+  audit-event list or the automation history, so they can't be shown.
+* **The audit trail has no "API key created" event.** Key creation comes from the IAM offline
+  session's start time.
 * **API key names and expiry dates shown in the Checkmarx One UI aren't available.** No documented
   API exposes them. Keys are identified by session ID, creation time and owner.
-* **IAM event data depends on tenant settings.** `iam_user_events`, `iam_admin_events` and
-  `api_key_usage` are only populated if **event saving is enabled** for the realm, and only for
-  that realm's event retention period. If saving is off, these files are empty, which doesn't mean
-  there was no activity.
 * **Filtering happens after download.** `/api/audit-events` only supports filtering by date on the
-  server, so the whole time window is downloaded and then searched. On large tenants, narrow
-  `--from`/`--to` and use `--only`. `--user` does cut the per-user API-key lookups down to the
-  matching users.
+  server. On large tenants, narrow the time range. Limiting the API-key check to some users also
+  cuts the per-user lookups.
 * **Data range is limited.** `/api/audit-events` keeps 365 days, and its data starts on 2026-03-29.
-  Use `--legacy-audit` for anything older.
-* **Permissions.** The key inherits its creator's roles. The IAM sections need `manage-users` /
-  `view-users`, `view-events` and `view-clients`. Sections the key can't read are skipped and
-  marked in `summary.json`.
+  Use the legacy audit option for older events.
+* **Permissions.** The key inherits its creator's roles. Full results need tenant-level audit
+  access, plus IAM `view-users` / `manage-users`, `view-events` and `view-clients`. Sections the
+  key can't read are skipped and listed on the Overview.
 * **Corporate proxy.** Node's built-in `fetch` ignores `HTTPS_PROXY` unless you set
   `NODE_USE_ENV_PROXY=1` (supported in recent Node 22.x and 24.x).
 

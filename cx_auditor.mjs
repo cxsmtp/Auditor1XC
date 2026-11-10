@@ -13,6 +13,10 @@
  *   api_key_usage.csv      key -> using user/IP  IAM /events (REFRESH_TOKEN on ast-app)
  *   iam_admin_events.csv   IAM admin changes     IAM /admin-events
  *   iam_user_events.csv    logins, token use     IAM /events
+ *   activity.csv           ONE person-centric timeline of all of the above: name, email,
+ *                          how they authenticated (API key / browser / OAuth client), action, target
+ *   ai_runs.csv            AI Triage/Remediation runs (AI credit use), attributed to the scan's user
+ *   people.csv             every identity seen: name, email, username, type, id
  *   summary.json, raw.json
  *
  * Tenant, IAM URL and API URL are read from the key's `iss` claim; override with
@@ -23,6 +27,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { fileURLToPath } from "node:url";
+import { Directory, buildTokenIndex, attributeCredential, describeTarget, attributeAiRuns, buildActivity, category } from "./cx_enrich.mjs";
 
 const API_KEY_CLIENT_ID = "ast-app";
 const PAGE_SIZE = 100;
@@ -149,7 +154,33 @@ class CxClient {
 
   adminEvents(start, end) { return this.pagedAdmin("/admin-events", { dateFrom: dateOnly(start), dateTo: dateOnly(end) }); }
   userEvents(start, end) { return this.pagedAdmin("/events", { dateFrom: dateOnly(start), dateTo: dateOnly(end) }); }
-  users() { return this.pagedAdmin("/users", { briefRepresentation: "true" }); }
+  users() { return this.pagedAdmin("/users", { briefRepresentation: "false" }); }
+  async userById(id) { return this.get(this.admin(`/users/${encodeURIComponent(id)}`)); }
+  async clients() { return (await this.get(this.admin("/clients"))) || []; }
+  async serviceAccountUser(clientUuid) { return this.get(this.admin(`/clients/${clientUuid}/service-account-user`)); }
+
+  /** Projects service: GET /api/projects -> {projects:[{id,name}], totalCount}. Used to name projects by id. */
+  async projects() {
+    const out = [];
+    for (let offset = 0; ; offset += 500) {
+      const page = (await this.get(`${this.astUrl}/api/projects`, { offset, limit: 500 })) || {};
+      const batch = page.projects || [];
+      out.push(...batch);
+      if (batch.length < 500 || (page.filteredTotalCount ?? page.totalCount ?? Infinity) <= out.length) return out;
+    }
+  }
+
+  /** AI Agents Coordinator: history of automated AI Triage / Remediation runs (AI credit use). */
+  async aiHistory(start, end) {
+    const out = [];
+    for (let offset = 0; ; offset += 200) {
+      const page = (await this.get(`${this.astUrl}/api/ai-agents-coordinator/history`,
+        { limit: 200, offset, fromDate: start.toISOString(), toDate: end.toISOString(), order: "DESC" })) || {};
+      const batch = page.history || [];
+      out.push(...batch);
+      if (batch.length < 200) return out;
+    }
+  }
   async clientUuid(clientId) { return ((await this.get(this.admin("/clients"), { clientId })) || [])[0]?.id || null; }
   async consents(uid) { return (await this.get(this.admin(`/users/${uid}/consents`))) || []; }
   async offlineSessions(uid, cid) { return (await this.get(this.admin(`/users/${uid}/offline-sessions/${cid}`))) || []; }
@@ -166,7 +197,7 @@ async function buildApiKeyInventory(client, users, onProgress = () => {}) {
     const consent = (await client.consents(u.id)).find((c) => c.clientId === API_KEY_CLIENT_ID);
     const grantCreated = consent ? msToIso(consent.createdDate) : "";
     const grantUpdated = consent ? msToIso(consent.lastUpdatedDate) : "";
-    const base = { created_by_user: u.username || "", created_by_user_id: u.id, email: u.email || "", user_enabled: u.enabled ?? "" };
+    const base = { created_by_name: "", created_by_user: u.username || "", created_by_user_id: u.id, email: u.email || "", user_enabled: u.enabled ?? "" };
     for (const s of sessions) {
       rows.push({ api_key_session_id: s.id || "", ...base, created_at: msToIso(s.start), last_used_at: msToIso(s.lastAccess),
         last_used_from_ip: s.ipAddress || "", offline_grant_first_created: grantCreated, offline_grant_last_updated: grantUpdated });
@@ -179,39 +210,60 @@ async function buildApiKeyInventory(client, users, onProgress = () => {}) {
   return rows;
 }
 
-function buildApiKeyUsage(userEvents, keys, usersById) {
-  const owner = Object.fromEntries(keys.filter((k) => k.api_key_session_id).map((k) => [k.api_key_session_id, k.created_by_user]));
+function buildApiKeyUsage(userEvents, keys, dir) {
+  const owner = Object.fromEntries(keys.filter((k) => k.api_key_session_id).map((k) => [k.api_key_session_id, k]));
   return userEvents
     .filter((e) => e.clientId === API_KEY_CLIENT_ID && TOKEN_USE_EVENTS.has(e.type))
-    .map((e) => ({
-      time: msToIso(e.time), event_type: e.type,
-      used_by_user: usersById[e.userId] || e.details?.username || "", used_by_user_id: e.userId || "",
-      ip_address: e.ipAddress || "", api_key_session_id: e.sessionId || "",
-      api_key_created_by: owner[e.sessionId] || "",
-      is_api_key: e.sessionId in owner || e.details?.refresh_token_type === "Offline",
-      error: e.error || "",
-    }));
+    .map((e) => {
+      const who = dir.person(e.userId);
+      const key = owner[e.sessionId];
+      return {
+        time: msToIso(e.time), used_by_name: who.name, used_by_email: who.email, ip_address: e.ip_address ?? e.ipAddress ?? "",
+        api_key_session_id: e.sessionId || "", api_key_owner_name: key?.created_by_name || "", api_key_created_at: key?.created_at || "",
+        event_type: e.type, is_api_key: e.sessionId in owner || e.details?.refresh_token_type === "Offline", error: e.error || "",
+        used_by_user: who.username, used_by_user_id: e.userId || "", api_key_created_by: key?.created_by_user || "",
+      };
+    });
 }
 
-const flattenAudit = (e, usersById) => ({
-  time: e.eventDate || "", event_id: e.eventID || "", event_type: e.eventType || "",
-  audit_resource: e.auditResource || "", action: e.actionType || "",
-  actor_user: usersById[e.actionUserId] || e.data?.username || "", actor_user_id: e.actionUserId || "",
-  ip_address: e.ipAddress || "", source: e._source || "", data: JSON.stringify(e.data || {}),
-});
+function flattenAudit(e, dir, tokenIndex, projectNames) {
+  const who = dir.person(e.actionUserId);
+  const via = attributeCredential({ userId: e.actionUserId, t: e.eventDate, ip: e.ipAddress }, tokenIndex, dir);
+  const tgt = describeTarget(e.data, dir, e.actionUserId, projectNames);
+  return {
+    time: e.eventDate || "", actor_name: who.name, actor_email: who.email, actor_type: who.type,
+    event_type: e.eventType || "", action: e.actionType || "", audit_resource: e.auditResource || "",
+    target: tgt.target, target_people: tgt.target_people, ip_address: e.ipAddress || "",
+    via: via.via, via_key: via.via_key, via_confidence: via.via_confidence, via_evidence: via.via_evidence,
+    category: category(e.eventType), actor_user: who.username, actor_user_id: e.actionUserId || "",
+    event_id: e.eventID || "", source: e._source || "", data: JSON.stringify(e.data || {}),
+  };
+}
 
-const flattenAdmin = (e, usersById) => {
+function flattenAdmin(e, dir, tokenIndex) {
   const a = e.authDetails || {};
-  return { time: msToIso(e.time), operation: e.operationType || "", resource_type: e.resourceType || "",
-    resource_path: e.resourcePath || "", actor_user: usersById[a.userId] || "", actor_user_id: a.userId || "",
-    actor_client: a.clientId || "", actor_ip: a.ipAddress || "", error: e.error || "", representation: e.representation || "" };
-};
+  const who = dir.person(a.userId);
+  const via = attributeCredential({ userId: a.userId, t: e.time, ip: a.ipAddress }, tokenIndex, dir);
+  const m = String(e.resourcePath || "").match(/^users\/([0-9a-f-]{36})/i);
+  return {
+    time: msToIso(e.time), actor_name: who.name, actor_email: who.email, actor_type: who.type,
+    operation: e.operationType || "", resource_type: e.resourceType || "", resource_path: e.resourcePath || "",
+    target_person: m ? dir.label(m[1]) : "", actor_ip: a.ipAddress || "", actor_client: a.clientId || "",
+    via: via.via, via_key: via.via_key, via_confidence: via.via_confidence, via_evidence: via.via_evidence,
+    error: e.error || "", actor_user: who.username, actor_user_id: a.userId || "", representation: e.representation || "",
+  };
+}
 
-const flattenUser = (e, usersById) => ({
-  time: msToIso(e.time), type: e.type || "", user: usersById[e.userId] || e.details?.username || "",
-  user_id: e.userId || "", client: e.clientId || "", ip_address: e.ipAddress || "",
-  session_id: e.sessionId || "", error: e.error || "", details: JSON.stringify(e.details || {}),
-});
+function flattenUser(e, dir, keySessionIds) {
+  const who = dir.person(e.userId);
+  return {
+    time: msToIso(e.time), user_name: who.name, email: who.email, user_type: who.type, type: e.type || "",
+    ip_address: e.ipAddress || "", client: e.clientId || "", error: e.error || "",
+    is_api_key: keySessionIds.has(e.sessionId) || e.details?.refresh_token_type === "Offline",
+    session_id: e.sessionId || "", user: who.username || e.details?.username || "", user_id: e.userId || "",
+    details: JSON.stringify(e.details || {}),
+  };
+}
 
 // ---------------------------------------------------------------- search --
 /**
@@ -221,14 +273,17 @@ const flattenUser = (e, usersById) => ({
  * records which filters were applied to which file.
  */
 const FILTER_FIELDS = {
-  user: ["actor_user", "actor_user_id", "user", "user_id", "used_by_user", "used_by_user_id",
-    "created_by_user", "created_by_user_id", "email", "api_key_created_by"],
-  ip: ["ip_address", "actor_ip", "last_used_from_ip"],
+  user: ["actor_name", "actor_email", "actor_user", "actor_user_id", "person", "person_id", "user_name", "user", "user_id",
+    "used_by_name", "used_by_email", "used_by_user", "used_by_user_id", "created_by_name", "created_by_user", "created_by_user_id",
+    "email", "api_key_owner_name", "api_key_created_by", "triggered_by", "triggered_by_email", "name", "username", "id"],
+  ip: ["ip_address", "actor_ip", "last_used_from_ip", "ip"],
   "event-type": ["event_type", "type"],
   action: ["action", "operation"],
-  resource: ["audit_resource", "resource_type", "resource_path"],
-  "key-id": ["api_key_session_id", "session_id"],
+  resource: ["audit_resource", "resource_type", "resource_path", "target", "project"],
+  "key-id": ["api_key_session_id", "session_id", "via_key", "triggered_via_key"],
 };
+/** In the merged activity timeline the event type lives in `action`. */
+const FILTER_FALLBACK = { "event-type": ["action"] };
 
 const splitValues = (list) => (list || []).flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
 
@@ -250,8 +305,8 @@ export function buildFilters(opts, users = []) {
   if (f.user) {
     const extra = [];
     for (const u of users) {
-      if ([u.username, u.email, u.id].some((v) => v && f.user.some((re) => re.test(v)))) {
-        for (const v of [u.username, u.email, u.id]) if (v) extra.push(literalRegex(v));
+      if ([u.username, u.email, u.id, u.name].some((v) => v && f.user.some((re) => re.test(v)))) {
+        for (const v of [u.username, u.email, u.id, u.name]) if (v) extra.push(literalRegex(v));
       }
     }
     f.user.push(...extra);
@@ -266,6 +321,7 @@ export function buildFilters(opts, users = []) {
 export function applyFilters(rows, filters) {
   const columns = new Set(rows.flatMap((r) => Object.keys(r)));
   const active = Object.entries(FILTER_FIELDS)
+    .map(([name, cols]) => [name, cols.some((c) => columns.has(c)) ? cols : FILTER_FALLBACK[name] || cols])
     .filter(([name, cols]) => filters[name] && cols.some((c) => columns.has(c)))
     .map(([name, cols]) => [name, cols.filter((c) => columns.has(c))]);
   const applied = active.map(([n]) => n);
@@ -340,9 +396,28 @@ export async function collect(opts, progress = () => {}) {
   };
 
   const users = await section("users", () => client.users());
-  const usersById = Object.fromEntries(users.map((u) => [u.id, u.username || ""]));
+  const dir = new Directory();
+  for (const u of users) {
+    dir.add({ id: u.id, username: u.username || "", email: u.email || "", firstName: u.firstName || "", lastName: u.lastName || "",
+      enabled: u.enabled, createdAt: msToIso(u.createdTimestamp), type: "user", source: "iam" });
+  }
 
-  let audit = [], adminEv = [], userEv = [], keys = [];
+  // OAuth clients act through a service-account user: map that user id to the client.
+  await section("oauth_clients", async () => {
+    const found = [];
+    for (const c of (await client.clients()).filter((c) => c.serviceAccountsEnabled)) {
+      try {
+        const sa = await client.serviceAccountUser(c.id);
+        if (sa?.id) {
+          dir.add({ id: sa.id, username: sa.username || "", clientId: c.clientId, type: "service-account", source: "service-account" });
+          found.push(c.clientId);
+        }
+      } catch (e) { if (!(e instanceof HttpError)) throw e; }
+    }
+    return found;
+  });
+
+  let audit = [], adminEv = [], userEv = [], keys = [], aiRaw = [], projects = [];
   if (sections.has("audit")) {
     audit = await section("audit_trail", async () => {
       let events = [];
@@ -363,28 +438,101 @@ export async function collect(opts, progress = () => {}) {
     });
   }
   if (sections.has("admin")) adminEv = await section("iam_admin_events", () => client.adminEvents(start, end));
-  if (sections.has("events") || sections.has("usage")) userEv = await section("iam_user_events", () => client.userEvents(start, end));
-  if ((sections.has("keys") || sections.has("usage")) && users.length) {
+  // IAM user events are also what tells us HOW each action was authenticated, so fetch them for audit too.
+  if (sections.has("events") || sections.has("usage") || sections.has("audit") || sections.has("admin")) {
+    userEv = await section("iam_user_events", () => client.userEvents(start, end));
+  }
+  if ((sections.has("keys") || sections.has("usage") || sections.has("audit")) && users.length) {
     const scope = keyUserScope ? users.filter(keyUserScope) : users;
     if (keyUserScope && !scope.length) progress("  note: no IAM user matches the user filter; API key inventory will be empty");
     keys = await section("api_keys", () => buildApiKeyInventory(client, scope, (i, n) => {
       if (i % 25 === 0 || i === n) progress(`  api_keys: ${i}/${n} users checked`);
     }));
   }
+  if (sections.has("audit") || sections.has("ai")) projects = await section("projects", () => client.projects());
+  if (sections.has("ai")) aiRaw = await section("ai_runs", () => client.aiHistory(start, end));
+
+  // ---- resolve every id we saw to a person
+  dir.learnFromAudit(audit);
+  dir.learnFromAdminEvents(adminEv);
+  dir.learnFromUserEvents(userEv);
+  const referenced = [...audit.map((e) => e.actionUserId), ...adminEv.map((e) => e.authDetails?.userId), ...userEv.map((e) => e.userId)];
+  const missing = dir.unresolved(referenced).slice(0, 300);
+  if (missing.length) {
+    await section("user_lookups", async () => {
+      const done = [];
+      for (const id of missing) {
+        try {
+          const u = await client.userById(id);
+          if (u?.id) dir.add({ id: u.id, username: u.username || "", email: u.email || "", firstName: u.firstName || "", lastName: u.lastName || "", enabled: u.enabled, type: "user", source: "lookup" });
+          done.push(id);
+        } catch (e) {
+          if (!(e instanceof HttpError)) throw e;
+          if (e.status === 404) { dir.add({ id, type: "deleted-user", source: "lookup" }); done.push(id); }
+        }
+      }
+      return done;
+    });
+  }
+  for (const k of keys) k.created_by_name = dir.label(k.created_by_user_id);
+
+  // ---- attribute + flatten
+  const keySessionIds = new Set(keys.map((k) => k.api_key_session_id).filter(Boolean));
+  const tokenIndex = buildTokenIndex(userEv, keySessionIds);
+  const projectNames = new Map(projects.map((p) => [String(p.id), p.name]));
+  const auditRows = audit.map((e) => flattenAudit(e, dir, tokenIndex, projectNames));
+  const adminRows = adminEv.map((e) => flattenAdmin(e, dir, tokenIndex));
+  const userRows = userEv.map((e) => flattenUser(e, dir, keySessionIds));
+  const usageRows = buildApiKeyUsage(userEv, keys, dir);
+  const aiRows = attributeAiRuns(aiRaw, auditRows, projectNames);
+
+  // what each API key was used for, from the attributed audit trail
+  const perKey = new Map();
+  for (const r of auditRows) if (r.via_key) (perKey.get(r.via_key) || perKey.set(r.via_key, []).get(r.via_key)).push(r);
+  for (const k of keys) {
+    const acts = perKey.get(k.api_key_session_id) || [];
+    const types = new Map();
+    for (const a of acts) types.set(a.event_type, (types.get(a.event_type) || 0) + 1);
+    k.actions_via_key = acts.length;
+    k.action_types = [...types].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([t, n]) => `${t} ×${n}`).join(", ");
+    k.last_action_at = acts.length ? acts.map((a) => a.time).sort().at(-1) : "";
+  }
 
   const datasets = {};
-  if (sections.has("audit")) datasets.audit_trail = audit.map((e) => flattenAudit(e, usersById));
-  if (sections.has("admin")) datasets.iam_admin_events = adminEv.map((e) => flattenAdmin(e, usersById));
-  if (sections.has("events")) datasets.iam_user_events = userEv.map((e) => flattenUser(e, usersById));
+  datasets.activity = buildActivity({
+    audit: sections.has("audit") ? auditRows : [], keys: sections.has("keys") ? keys : [], usage: sections.has("usage") ? usageRows : [],
+    userEvents: sections.has("events") ? userRows : [], adminEvents: sections.has("admin") ? adminRows : [], aiRuns: aiRows,
+  });
+  if (sections.has("audit")) datasets.audit_trail = auditRows;
   if (sections.has("keys")) datasets.api_keys = keys;
-  if (sections.has("usage")) datasets.api_key_usage = buildApiKeyUsage(userEv, keys, usersById);
+  if (sections.has("usage")) datasets.api_key_usage = usageRows;
+  if (sections.has("ai")) datasets.ai_runs = aiRows;
+  if (sections.has("admin")) datasets.iam_admin_events = adminRows;
+  if (sections.has("events")) datasets.iam_user_events = userRows;
+  const keyCount = new Map(), actCount = new Map();
+  for (const k of keys) keyCount.set(k.created_by_user_id, (keyCount.get(k.created_by_user_id) || 0) + 1);
+  for (const r of datasets.activity) if (r.person_id) actCount.set(r.person_id, (actCount.get(r.person_id) || 0) + 1);
+  datasets.people = dir.list().map((p) => ({
+    name: dir.label(p.id), email: p.email || "", username: p.username || "", type: p.type, enabled: p.enabled ?? "",
+    api_keys: keyCount.get(p.id) || 0, activity_rows: actCount.get(p.id) || 0, client_id: p.clientId || "",
+    created_at: p.createdAt || "", resolved_from: p.source || "", id: p.id,
+  })).sort((a, b) => b.activity_rows - a.activity_rows || a.name.localeCompare(b.name));
 
-  const userList = users.map((u) => ({ id: u.id, username: u.username || "", email: u.email || "", enabled: u.enabled }));
-  return { report, users: userList, raw: { audit_trail: audit, iam_admin_events: adminEv, iam_user_events: userEv, api_keys: keys }, datasets };
+  const attributed = auditRows.filter((r) => r.via !== "unknown").length;
+  report.attribution = {
+    audit_events: auditRows.length, with_credential: attributed,
+    by_api_key: auditRows.filter((r) => r.via === "API key").length,
+    unresolved_people: dir.list().filter((p) => p.type === "unknown").length,
+    note: "credential attribution uses IAM token events (30-min access-token lifetime); 'none' means no IAM events in the window",
+  };
+
+  const userList = dir.list().filter((p) => p.type !== "service-account").map((p) => ({ id: p.id, username: p.username || "", email: p.email || "",
+    name: dir.label(p.id), enabled: p.enabled }));
+  return { report, users: userList, raw: { audit_trail: audit, iam_admin_events: adminEv, iam_user_events: userEv, api_keys: keys, ai_runs: aiRaw }, datasets };
 }
 
 // ------------------------------------------------------------------- main --
-export const SECTIONS = ["audit", "admin", "events", "keys", "usage"];
+export const SECTIONS = ["audit", "admin", "events", "keys", "usage", "ai"];
 
 const HELP = `usage: node cx_auditor.mjs [options]
 
@@ -461,7 +609,7 @@ export async function run(argv = process.argv.slice(2)) {
       // --user also narrows the per-user API key lookups (one IAM call pair per user otherwise)
       keyUserScope: (u) => {
         const f = buildFilters({ user: a.user }, []);
-        return !f.user || [u.username, u.email, u.id].some((v) => v && f.user.some((re) => re.test(v)));
+        return !f.user || [u.username, u.email, u.id, u.name].some((v) => v && f.user.some((re) => re.test(v)));
       },
     }, log);
   } catch (e) {
@@ -488,13 +636,17 @@ export async function run(argv = process.argv.slice(2)) {
 
   const perUser = {};
   const bump = (who, field) => { if (!who) return; (perUser[who] ||= {})[field] = (perUser[who][field] || 0) + 1; };
-  for (const k of outputs["api_keys.csv"] || []) bump(k.created_by_user, "api_keys_created");
+  for (const k of outputs["api_keys.csv"] || []) bump(k.created_by_name || k.created_by_user, "api_keys_created");
   for (const u of outputs["api_key_usage.csv"] || []) {
-    const who = u.used_by_user || u.used_by_user_id;
+    const who = u.used_by_name || u.used_by_user || u.used_by_user_id;
     bump(who, "api_key_uses");
     if (who && u.ip_address) (perUser[who].api_key_ips ||= new Set()).add(u.ip_address);
   }
-  for (const r of outputs["audit_trail.csv"] || []) bump(r.actor_user || r.actor_user_id, "audit_actions");
+  for (const r of outputs["audit_trail.csv"] || []) {
+    const who = r.actor_name || r.actor_user || r.actor_user_id;
+    bump(who, "audit_actions");
+    if (r.via === "API key") bump(who, "audit_actions_via_api_key");
+  }
   for (const s of Object.values(perUser)) if (s.api_key_ips) s.api_key_ips = [...s.api_key_ips].sort();
   report.per_user = perUser;
 

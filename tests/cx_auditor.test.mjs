@@ -68,6 +68,21 @@ before(async () => {
 });
 after(() => server.close());
 
+/** RFC 4180 CSV parser (quoted fields may contain commas, quotes and newlines). */
+function parseCsv(text) {
+  const rows = []; let row = [], field = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else q = false; } else field += c; }
+    else if (c === '"') q = true;
+    else if (c === ",") { row.push(field); field = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && text[i + 1] === "\n") i++; row.push(field); rows.push(row); row = []; field = ""; }
+    else field += c;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
 async function runWith(extra) {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), "cxa-"));
   calls.length = 0;
@@ -80,10 +95,8 @@ async function runWith(extra) {
   const csv = (n) => {
     const p = path.join(out, n);
     if (!fs.existsSync(p)) return null;
-    const [head, ...lines] = fs.readFileSync(p, "utf8").trim().split("\r\n");
-    const cols = head.split(",");
-    // tests only look at simple columns, so a naive split is enough here
-    return lines.filter(Boolean).map((l) => Object.fromEntries(l.split(",").map((v, i) => [cols[i], v])));
+    const [head, ...rows] = parseCsv(fs.readFileSync(p, "utf8"));
+    return rows.map((r) => Object.fromEntries(r.map((v, i) => [head[i], v])));
   };
   return { csv, summary: JSON.parse(fs.readFileSync(path.join(out, "summary.json"), "utf8")) };
 }

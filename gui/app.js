@@ -19,48 +19,85 @@ function h(tag, attrs = {}, ...children) {
 
 // ------------------------------------------------------------ data sets --
 const DATASETS = {
+  activity: {
+    label: "Who did what", time: "time",
+    columns: ["time", "person", "email", "action", "target", "target_people", "via", "via_key", "confidence", "ip", "category",
+      "evidence", "source", "person_type", "ref", "person_id"],
+    hidden: ["evidence", "person_type", "ref", "person_id", "category"],
+    facets: ["person", "category", "action", "via", "confidence", "source", "ip"],
+    userCols: ["person", "email", "person_id"], ipCols: ["ip"], isError: (r) => /failed/.test(r.action),
+  },
   audit_trail: {
     label: "Audit trail", time: "time",
-    columns: ["time", "actor_user", "event_type", "action", "audit_resource", "ip_address", "data", "source", "actor_user_id", "event_id"],
-    hidden: ["actor_user_id", "event_id", "source"],
-    facets: ["event_type", "action", "audit_resource", "actor_user", "ip_address", "source"],
-    userCols: ["actor_user", "actor_user_id"], ipCols: ["ip_address"], errorCol: null,
+    columns: ["time", "actor_name", "actor_email", "event_type", "target", "target_people", "via", "via_key", "via_confidence", "ip_address",
+      "via_evidence", "category", "action", "audit_resource", "actor_type", "actor_user", "actor_user_id", "event_id", "source", "data"],
+    hidden: ["via_evidence", "category", "action", "audit_resource", "actor_type", "actor_user", "actor_user_id", "event_id", "source", "data"],
+    facets: ["event_type", "category", "actor_name", "via", "via_confidence", "ip_address"],
+    userCols: ["actor_name", "actor_email", "actor_user", "actor_user_id"], ipCols: ["ip_address"], isError: null,
   },
   api_keys: {
     label: "API keys", time: "created_at", chart: false,
-    columns: ["created_by_user", "email", "created_at", "last_used_at", "last_used_from_ip", "user_enabled", "api_key_session_id",
-      "offline_grant_first_created", "offline_grant_last_updated", "created_by_user_id"],
-    hidden: ["offline_grant_first_created", "offline_grant_last_updated", "created_by_user_id"],
-    facets: ["created_by_user", "user_enabled", "last_used_from_ip"],
-    userCols: ["created_by_user", "created_by_user_id", "email"], ipCols: ["last_used_from_ip"], errorCol: null,
+    columns: ["created_by_name", "email", "created_at", "last_used_at", "last_used_from_ip", "actions_via_key", "action_types", "last_action_at",
+      "user_enabled", "api_key_session_id", "created_by_user", "created_by_user_id", "offline_grant_first_created", "offline_grant_last_updated"],
+    hidden: ["created_by_user", "created_by_user_id", "offline_grant_first_created", "offline_grant_last_updated"],
+    facets: ["created_by_name", "user_enabled", "last_used_from_ip"],
+    userCols: ["created_by_name", "email", "created_by_user", "created_by_user_id"], ipCols: ["last_used_from_ip"], isError: null,
   },
   api_key_usage: {
     label: "API key usage", time: "time",
-    columns: ["time", "used_by_user", "ip_address", "api_key_created_by", "event_type", "api_key_session_id", "is_api_key", "error", "used_by_user_id"],
-    hidden: ["used_by_user_id"],
-    facets: ["used_by_user", "ip_address", "api_key_created_by", "event_type", "is_api_key", "error"],
-    userCols: ["used_by_user", "used_by_user_id", "api_key_created_by"], ipCols: ["ip_address"], errorCol: "error",
+    columns: ["time", "used_by_name", "used_by_email", "ip_address", "api_key_owner_name", "api_key_session_id", "api_key_created_at",
+      "event_type", "is_api_key", "error", "used_by_user", "used_by_user_id", "api_key_created_by"],
+    hidden: ["event_type", "used_by_user", "used_by_user_id", "api_key_created_by"],
+    facets: ["used_by_name", "ip_address", "api_key_owner_name", "api_key_session_id", "is_api_key", "error"],
+    userCols: ["used_by_name", "used_by_email", "used_by_user", "used_by_user_id", "api_key_owner_name"], ipCols: ["ip_address"], isError: (r) => !!r.error,
+  },
+  ai_runs: {
+    label: "AI credit usage", time: "time",
+    columns: ["time", "project", "origin", "status", "findings_processed", "findings_succeeded", "findings_failed", "findings_skipped",
+      "triggered_by", "triggered_by_email", "triggered_via", "triggered_via_key", "attribution_confidence", "attribution_evidence",
+      "scanners", "failure_reason", "occurrences", "run_id"],
+    hidden: ["findings_skipped", "triggered_via_key", "attribution_evidence", "occurrences", "run_id"],
+    facets: ["project", "origin", "status", "triggered_by", "attribution_confidence", "scanners"],
+    userCols: ["triggered_by", "triggered_by_email"], ipCols: [], isError: (r) => !!r.failure_reason,
   },
   iam_admin_events: {
     label: "IAM admin events", time: "time",
-    columns: ["time", "actor_user", "operation", "resource_type", "resource_path", "actor_ip", "actor_client", "error", "representation", "actor_user_id"],
-    hidden: ["actor_user_id"],
-    facets: ["operation", "resource_type", "actor_user", "actor_ip", "actor_client", "error"],
-    userCols: ["actor_user", "actor_user_id"], ipCols: ["actor_ip"], errorCol: "error",
+    columns: ["time", "actor_name", "actor_email", "operation", "resource_type", "target_person", "resource_path", "via", "via_confidence",
+      "actor_ip", "actor_client", "error", "via_key", "via_evidence", "actor_type", "actor_user", "actor_user_id", "representation"],
+    hidden: ["via_key", "via_evidence", "actor_type", "actor_user", "actor_user_id", "representation"],
+    facets: ["operation", "resource_type", "actor_name", "via", "actor_ip", "actor_client", "error"],
+    userCols: ["actor_name", "actor_email", "actor_user", "actor_user_id"], ipCols: ["actor_ip"], isError: (r) => !!r.error,
   },
   iam_user_events: {
     label: "IAM user events", time: "time",
-    columns: ["time", "user", "type", "ip_address", "client", "error", "session_id", "details", "user_id"],
-    hidden: ["user_id", "session_id"],
-    facets: ["type", "user", "client", "ip_address", "error"],
-    userCols: ["user", "user_id"], ipCols: ["ip_address"], errorCol: "error",
+    columns: ["time", "user_name", "email", "type", "ip_address", "client", "error", "is_api_key", "session_id", "user_type", "user", "user_id", "details"],
+    hidden: ["session_id", "user_type", "user", "user_id"],
+    facets: ["type", "user_name", "client", "ip_address", "error", "is_api_key"],
+    userCols: ["user_name", "email", "user", "user_id"], ipCols: ["ip_address"], isError: (r) => !!r.error,
+  },
+  people: {
+    label: "People", time: "created_at", chart: false,
+    columns: ["name", "email", "username", "type", "enabled", "api_keys", "activity_rows", "client_id", "created_at", "resolved_from", "id"],
+    hidden: ["resolved_from"],
+    facets: ["type", "enabled", "resolved_from"],
+    userCols: ["name", "email", "username", "id"], ipCols: [], isError: null,
   },
 };
 const JSON_COLS = new Set(["data", "details", "representation"]);
-const MONO_COLS = new Set(["ip_address", "actor_ip", "last_used_from_ip", "api_key_session_id", "session_id", "event_id",
-  "actor_user_id", "user_id", "used_by_user_id", "created_by_user_id"]);
-const TIME_COLS = new Set(["time", "created_at", "last_used_at", "offline_grant_first_created", "offline_grant_last_updated"]);
-const pretty = (c) => c.replace(/_/g, " ").replace(/\bip\b/g, "IP").replace(/\bid\b/g, "ID").replace(/^./, (m) => m.toUpperCase());
+const MONO_COLS = new Set(["ip_address", "actor_ip", "last_used_from_ip", "ip", "api_key_session_id", "session_id", "event_id", "via_key",
+  "triggered_via_key", "actor_user_id", "user_id", "used_by_user_id", "created_by_user_id", "person_id", "run_id", "ref", "id"]);
+const TIME_COLS = new Set(["time", "created_at", "last_used_at", "last_action_at", "api_key_created_at", "offline_grant_first_created", "offline_grant_last_updated"]);
+const CONFIDENCE_COLS = new Set(["via_confidence", "confidence", "attribution_confidence"]);
+const LABELS = {
+  person: "Person", actor_name: "Person", actor_email: "Email", used_by_name: "Used by", used_by_email: "Email", created_by_name: "Created by",
+  api_key_owner_name: "Key owner", api_key_session_id: "API key (session)", via: "Authenticated via", via_key: "API key used",
+  via_confidence: "Confidence", via_evidence: "How we know", evidence: "How we know", target_people: "People affected", target_person: "Person affected",
+  user_name: "Person", triggered_by: "Triggered by (likely)", triggered_by_email: "Email", triggered_via: "Authenticated via",
+  triggered_via_key: "API key used", attribution_confidence: "Confidence", attribution_evidence: "How we know", actions_via_key: "Actions with key",
+  action_types: "What the key did", last_action_at: "Last action with key", findings_processed: "Findings processed", activity_rows: "Activity",
+  is_api_key: "Is API key", origin: "AI feature",
+};
+const pretty = (c) => LABELS[c] || c.replace(/_/g, " ").replace(/\bip\b/g, "IP").replace(/\bid\b/g, "ID").replace(/^./, (m) => m.toUpperCase());
 
 // ---------------------------------------------------------------- state --
 const state = {
@@ -109,8 +146,8 @@ function compileUserTokens(list) {
     if (!tok) continue;
     out.push(tok);
     for (const u of state.users) {
-      if ([u.username, u.email, u.id].some((v) => v && tok.re.test(v))) {
-        for (const v of [u.username, u.email, u.id]) if (v) out.push({ neg: tok.neg, re: new RegExp(`^${escapeRe(v)}$`, "i"), raw: tok.raw });
+      if ([u.username, u.email, u.id, u.name].some((v) => v && tok.re.test(v))) {
+        for (const v of [u.username, u.email, u.id, u.name]) if (v) out.push({ neg: tok.neg, re: new RegExp(`^${escapeRe(v)}$`, "i"), raw: tok.raw });
       }
     }
   }
@@ -143,7 +180,7 @@ function globalPredicate(key) {
       const pos = text.filter((t) => !t.neg);
       if (pos.length && !pos.some((t) => hay.includes(t.q))) return false;
     }
-    if (g.errorsOnly && ds.errorCol && !r[ds.errorCol]) return false;
+    if (g.errorsOnly && ds.isError && !ds.isError(r)) return false;
     if (!Number.isNaN(from) || !Number.isNaN(to)) {
       const t = rowTime(r, key);
       if (Number.isNaN(t)) return false;
@@ -213,17 +250,33 @@ function renderOverview() {
 
   const tile = (label, value, sub, onclick) => h("button", { class: "tile", onclick },
     h("div", { class: "label" }, label), h("div", { class: "value" }, value === null ? "—" : fmt(value)), h("div", { class: "sub" }, sub || ""));
+  const act = d.activity || [];
+  const people = new Set(act.map((r) => r.person).filter((p) => p && !p.startsWith("(")));
+  const viaKey = d.audit_trail?.filter((r) => r.via === "API key") ?? null;
   const failed = d.iam_user_events?.filter((r) => r.error) ?? null;
-  const distinctUsers = new Set();
-  for (const k of Object.keys(DATASETS)) for (const r of d[k] || []) for (const c of DATASETS[k].userCols.slice(0, 1)) if (r[c]) distinctUsers.add(r[c]);
+  const ai = d.ai_runs;
+  const aiFindings = ai ? ai.reduce((n, r) => n + (Number(r.findings_processed) || 0), 0) : null;
   wrap.append(h("div", { class: "tiles" },
-    tile("Active users", d.audit_trail || d.iam_user_events ? distinctUsers.size : null, `${fmt(state.users.length)} users in tenant`),
-    tile("Audit events", d.audit_trail?.length ?? null, "user actions", () => goTab("audit_trail")),
-    tile("API keys", d.api_keys?.length ?? null, d.api_keys ? `${new Set(d.api_keys.map((r) => r.created_by_user)).size} owners` : "not fetched", () => goTab("api_keys")),
-    tile("API key uses", d.api_key_usage?.length ?? null, d.api_key_usage ? `${new Set(d.api_key_usage.map((r) => r.ip_address).filter(Boolean)).size} distinct IPs` : "not fetched", () => goTab("api_key_usage")),
+    tile("People active", people.size, `${fmt(state.users.length)} known identities`, () => goTab("people")),
+    tile("Actions", d.audit_trail?.length ?? null, "in the audit trail", () => goTab("activity")),
+    tile("Actions via API key", viaKey?.length ?? null, viaKey ? `${new Set(viaKey.map((r) => r.actor_name)).size} people, ${new Set(viaKey.map((r) => r.via_key)).size} keys` : "", () => {
+      resetTab("audit_trail"); tabState("audit_trail").facets.via = { inc: ["API key"], exc: [] }; goTab("audit_trail");
+    }),
+    tile("API keys", d.api_keys?.length ?? null, d.api_keys ? `${new Set(d.api_keys.map((r) => r.created_by_name)).size} owners` : "not fetched", () => goTab("api_keys")),
+    tile("AI runs (credits)", ai?.length ?? null, ai ? `${fmt(aiFindings)} findings processed` : "not fetched", () => goTab("ai_runs")),
     tile("Failed sign-ins", failed?.length ?? null, "IAM events with errors", () => { state.global.errorsOnly = true; syncGlobalInputs(); goTab("iam_user_events"); }),
-    tile("IAM admin changes", d.iam_admin_events?.length ?? null, "users, roles, clients", () => goTab("iam_admin_events")),
   ));
+
+  if (state.report?.attribution && d.audit_trail) {
+    const a = state.report.attribution;
+    const pct = a.audit_events ? Math.round((a.with_credential / a.audit_events) * 100) : 0;
+    wrap.append(h("div", { class: "card note" },
+      h("strong", {}, "Attribution: "),
+      `${fmt(a.with_credential)} of ${fmt(a.audit_events)} audit events (${pct}%) are linked to the credential used — ${fmt(a.by_api_key)} through an API key. `,
+      a.with_credential < a.audit_events
+        ? h("span", { class: "muted" }, "The rest have no IAM sign-in/token event in the 30 minutes before them. That usually means IAM event saving is off or its retention is shorter than the time range — the person is still named, only the credential is unknown.")
+        : null));
+  }
 
   if (state.report?.sections) {
     const failedSections = Object.entries(state.report.sections).filter(([, s]) => s.status !== "ok");
@@ -241,8 +294,8 @@ function renderOverview() {
   wrap.append(findings.length ? h("div", { class: "findings" }, findings.map(renderFinding))
     : h("div", { class: "none" }, "Nothing flagged for the current filters."));
 
-  wrap.append(h("div", { class: "section-title" }, "Per-user summary", h("span", { class: "muted" }, "click a user to filter every tab")));
-  wrap.append(renderUserSummary(d));
+  wrap.append(h("div", { class: "section-title" }, "People", h("span", { class: "muted" }, "click a person to see everything they did")));
+  wrap.append(renderPeopleSummary(d));
   return wrap;
 }
 
@@ -255,45 +308,76 @@ function renderFinding(f) {
 }
 
 const DAY = 86_400_000;
+const shortId = (s) => (s ? String(s).slice(0, 8) : "");
 function computeFindings(d) {
   const out = [];
-  const showUsage = (sid) => () => { resetTab("api_key_usage"); tabState("api_key_usage").colFilters.api_key_session_id = `=${sid}`; goTab("api_key_usage"); };
+  const keyActions = (sid) => () => { resetTab("audit_trail"); tabState("audit_trail").colFilters.via_key = `=${sid}`; goTab("audit_trail"); };
 
+  if (d.audit_trail) {
+    // which people acted through API keys, and what they did
+    const viaKey = d.audit_trail.filter((r) => r.via === "API key" && r.via_key);
+    const byKey = new Map();
+    for (const r of viaKey) {
+      const e = byKey.get(r.via_key) || { person: r.actor_name, email: r.actor_email, rows: [] };
+      e.rows.push(r);
+      byKey.set(r.via_key, e);
+    }
+    const keyInfo = new Map((d.api_keys || []).map((k) => [k.api_key_session_id, k]));
+    for (const [sid, e] of [...byKey].sort((a, b) => b[1].rows.length - a[1].rows.length).slice(0, 8)) {
+      const deletes = e.rows.filter((r) => /delete/i.test(r.event_type)).length;
+      const k = keyInfo.get(sid);
+      const disabled = k && String(k.user_enabled) === "false";
+      out.push({
+        sev: disabled ? "high" : deletes ? "review" : "info",
+        title: `${e.person}${e.email ? ` <${e.email}>` : ""} performed ${e.rows.length} action(s) with API key ${shortId(sid)}`,
+        detail: `${summarize(e.rows, "event_type")}${k ? ` · key created ${shortTime(k.created_at).slice(0, 10)}` : ""}${disabled ? " · OWNER IS DISABLED" : ""} · IPs: ${[...new Set(e.rows.map((r) => r.ip_address).filter(Boolean))].slice(0, 5).join(", ") || "—"}`,
+        action: keyActions(sid), actionLabel: "Show these actions",
+      });
+    }
+  }
   if (d.api_key_usage) {
     const byKey = new Map();
     for (const r of d.api_key_usage) {
       if (!r.api_key_session_id) continue;
-      const e = byKey.get(r.api_key_session_id) || { ips: new Set(), owner: r.api_key_created_by || r.used_by_user, n: 0 };
+      const e = byKey.get(r.api_key_session_id) || { ips: new Set(), owner: r.api_key_owner_name || r.used_by_name, n: 0 };
       if (r.ip_address) e.ips.add(r.ip_address);
       e.n++;
       byKey.set(r.api_key_session_id, e);
     }
     for (const [sid, e] of byKey) if (e.ips.size > 1) out.push({
       sev: e.ips.size >= 4 ? "high" : "review",
-      title: `API key of ${e.owner || "unknown user"} used from ${e.ips.size} different IPs`,
-      detail: `Key session ${sid.slice(0, 12)}… · ${e.n} uses · IPs: ${[...e.ips].slice(0, 8).join(", ")}${e.ips.size > 8 ? " …" : ""}. Could be CI runners, or a leaked key.`,
-      action: showUsage(sid),
+      title: `API key ${shortId(sid)} of ${e.owner || "unknown user"} used from ${e.ips.size} different IPs`,
+      detail: `${e.n} uses · IPs: ${[...e.ips].slice(0, 8).join(", ")}${e.ips.size > 8 ? " …" : ""}. Could be CI runners, or a leaked key.`,
+      action: () => { resetTab("api_key_usage"); tabState("api_key_usage").colFilters.api_key_session_id = `=${sid}`; goTab("api_key_usage"); },
     });
   }
   if (d.api_keys) {
     const disabled = d.api_keys.filter((r) => String(r.user_enabled) === "false");
     if (disabled.length) out.push({
       sev: "high", title: `${disabled.length} API key(s) belong to disabled users`,
-      detail: `Owners: ${[...new Set(disabled.map((r) => r.created_by_user))].join(", ")}. Keys of disabled users should be revoked.`,
+      detail: `Owners: ${[...new Set(disabled.map((r) => `${r.created_by_name}${r.email ? ` <${r.email}>` : ""}`))].join(", ")}. Keys of disabled users should be revoked.`,
       action: () => { resetTab("api_keys"); tabState("api_keys").facets.user_enabled = { inc: ["false"], exc: [] }; goTab("api_keys"); },
     });
     const stale = d.api_keys.filter((r) => r.last_used_at && Date.now() - Date.parse(r.last_used_at) > 90 * DAY);
     if (stale.length) out.push({
       sev: "review", title: `${stale.length} API key(s) unused for more than 90 days`,
-      detail: `Owners: ${[...new Set(stale.map((r) => r.created_by_user))].slice(0, 15).join(", ")}. Unused keys are candidates for revocation.`,
+      detail: `Owners: ${[...new Set(stale.map((r) => r.created_by_name))].slice(0, 15).join(", ")}. Unused keys are candidates for revocation.`,
       action: () => { resetTab("api_keys"); tabState("api_keys").sort = { col: "last_used_at", dir: "asc" }; goTab("api_keys"); },
       actionLabel: "Show oldest first",
     });
-    const perOwner = countBy(d.api_keys, "created_by_user");
-    for (const [owner, n] of perOwner) if (n >= 5) out.push({
+    for (const [owner, n] of countBy(d.api_keys, "created_by_name")) if (n >= 5) out.push({
       sev: "review", title: `${owner} has ${n} API keys`,
-      detail: "Many keys per user make it hard to know which integration uses which key.",
+      detail: "Many keys per person make it hard to know which integration uses which key.",
       action: () => { resetTab("api_keys"); filterUser(owner); goTab("api_keys"); },
+    });
+  }
+  if (d.ai_runs?.length) {
+    const byPerson = countBy(d.ai_runs, "triggered_by");
+    const unattributed = d.ai_runs.filter((r) => !r.triggered_by).length;
+    out.push({
+      sev: "info", title: `${d.ai_runs.length} AI Triage/Remediation run(s) consumed AI credits`,
+      detail: `Likely triggered by: ${byPerson.filter(([p]) => p).slice(0, 6).map(([p, n]) => `${p} ×${n}`).join(", ") || "—"}${unattributed ? ` · ${unattributed} not attributable (scheduled/automatic scans)` : ""}. Credit amounts per run are not exposed by the API.`,
+      action: () => { resetTab("ai_runs"); tabState("ai_runs").groupBy = "triggered_by"; goTab("ai_runs"); }, actionLabel: "Show by person",
     });
   }
   if (d.iam_user_events) {
@@ -302,15 +386,15 @@ function computeFindings(d) {
     for (const r of failed) {
       if (!r.ip_address) continue;
       const e = byIp.get(r.ip_address) || { users: new Set(), n: 0 };
-      e.users.add(r.user || r.user_id); e.n++;
+      e.users.add(r.user_name || r.user_id); e.n++;
       byIp.set(r.ip_address, e);
     }
     for (const [ip, e] of byIp) if (e.users.size >= 3) out.push({
-      sev: "high", title: `Failed sign-ins for ${e.users.size} different users from ${ip}`,
-      detail: `${e.n} failures. One IP failing against many accounts can indicate password spraying.`,
+      sev: "high", title: `Failed sign-ins for ${e.users.size} different people from ${ip}`,
+      detail: `${e.n} failures (${[...e.users].slice(0, 6).join(", ")}). One IP failing against many accounts can indicate password spraying.`,
       action: () => { state.global.errorsOnly = true; state.global.ips = [ip]; syncGlobalInputs(); goTab("iam_user_events"); },
     });
-    for (const [user, n] of countBy(failed, "user")) if (n >= 5) out.push({
+    for (const [user, n] of countBy(failed, "user_name")) if (n >= 5) out.push({
       sev: "review", title: `${n} failed sign-ins for ${user}`,
       detail: "Repeated failures for one account: forgotten password, a misconfigured integration, or guessing.",
       action: () => { state.global.errorsOnly = true; filterUser(user); goTab("iam_user_events"); },
@@ -319,20 +403,26 @@ function computeFindings(d) {
   if (d.audit_trail) {
     const deletes = d.audit_trail.filter((r) => /delete/i.test(r.action) || /\.delete$/i.test(r.event_type));
     if (deletes.length) {
-      const byUser = countBy(deletes, "actor_user");
+      const byUser = countBy(deletes, "actor_name");
       out.push({
-        sev: "info", title: `${fmt(deletes.length)} delete action(s) by ${byUser.length} user(s)`,
+        sev: "info", title: `${fmt(deletes.length)} delete action(s) by ${byUser.length} people`,
         detail: `${byUser.slice(0, 8).map(([u, n]) => `${u || "unknown"} ×${n}`).join(", ")}${byUser.length > 8 ? " …" : ""} · ${summarize(deletes, "event_type")}`,
-        action: () => { resetTab("audit_trail"); tabState("audit_trail").colFilters.action = "delete*"; tabState("audit_trail").groupBy = "actor_user"; goTab("audit_trail"); },
-        actionLabel: "Show by user",
+        action: () => { resetTab("audit_trail"); tabState("audit_trail").colFilters.event_type = "*delete*"; tabState("audit_trail").groupBy = "actor_name"; goTab("audit_trail"); },
+        actionLabel: "Show by person",
       });
     }
     const PRIV = /^(role\.|users\.(assign|unassign|create|delete)|groups\.(assign|unassign)|oauth2-client\.|identity-provider\.|realm\.update|mfa\.delete|ldap\.|tenant-settings\.)|cxiam\.(user|role|oauth2-client|identity-provider|realm)/i;
     const priv = d.audit_trail.filter((r) => PRIV.test(r.event_type));
     if (priv.length) out.push({
       sev: "review", title: `${priv.length} access-control / identity change(s)`,
-      detail: `${summarize(priv, "event_type")} · by ${[...new Set(priv.map((r) => r.actor_user || r.actor_user_id))].slice(0, 10).join(", ")}`,
-      action: () => { resetTab("audit_trail"); tabState("audit_trail").colFilters.event_type = "role.*, users.*, groups.*, oauth2-client.*, identity-provider.*, realm.*, mfa.*, ldap.*, tenant-settings.*, *cxiam*"; goTab("audit_trail"); },
+      detail: `${summarize(priv, "event_type")} · by ${[...new Set(priv.map((r) => r.actor_name))].slice(0, 10).join(", ")}`,
+      action: () => { resetTab("audit_trail"); tabState("audit_trail").facets.category = { inc: ["Identity & access"], exc: [] }; goTab("audit_trail"); },
+    });
+    const unknown = d.audit_trail.filter((r) => /^unknown user/.test(r.actor_name));
+    if (unknown.length) out.push({
+      sev: "review", title: `${unknown.length} action(s) by IDs that could not be resolved to a person`,
+      detail: "IAM did not return these users and no event named them. They may belong to another identity provider or a system process.",
+      action: () => { resetTab("audit_trail"); tabState("audit_trail").colFilters.actor_name = "unknown user*"; goTab("audit_trail"); },
     });
   }
   const rank = { high: 0, review: 1, info: 2 };
@@ -345,32 +435,34 @@ function countBy(rows, col) {
 }
 const summarize = (rows, col) => countBy(rows, col).slice(0, 5).map(([v, n]) => `${v || "(empty)"} ×${n}`).join(", ");
 
-function renderUserSummary(d) {
+/** One row per person, built from the merged timeline so every source counts. */
+function renderPeopleSummary(d) {
   const rows = new Map();
-  const get = (name) => {
-    if (!name) return null;
-    if (!rows.has(name)) {
-      const u = state.users.find((x) => x.username === name);
-      rows.set(name, { user: name, email: u?.email || "", enabled: u ? String(u.enabled) : "", audit: 0, deletes: 0, keys: 0, uses: 0, ips: new Set(), failures: 0, last: "" });
-    }
-    return rows.get(name);
-  };
-  const seen = (e, t) => { if (t && t > e.last) e.last = t; };
-  for (const r of d.audit_trail || []) { const e = get(r.actor_user); if (!e) continue; e.audit++; if (/delete/i.test(r.action)) e.deletes++; seen(e, r.time); }
-  for (const r of d.api_keys || []) { const e = get(r.created_by_user); if (e) { e.keys++; seen(e, r.last_used_at); } }
-  for (const r of d.api_key_usage || []) { const e = get(r.used_by_user); if (!e) continue; e.uses++; if (r.ip_address) e.ips.add(r.ip_address); seen(e, r.time); }
-  for (const r of d.iam_user_events || []) { const e = get(r.user); if (!e) continue; if (r.error) e.failures++; seen(e, r.time); }
-  const list = [...rows.values()].sort((a, b) => (b.audit + b.uses) - (a.audit + a.uses));
-  if (!list.length) return h("div", { class: "none" }, "No user activity for the current filters.");
-  const cols = [["user", "User"], ["email", "Email"], ["enabled", "Enabled"], ["audit", "Audit actions"], ["deletes", "Deletes"],
-    ["keys", "API keys"], ["uses", "Key uses"], ["ips", "Key IPs"], ["failures", "Failed sign-ins"], ["last", "Last activity"]];
+  for (const r of d.activity || []) {
+    if (!r.person) continue;
+    const e = rows.get(r.person) || { person: r.person, email: r.email || "", type: r.person_type || "", actions: 0, viaKey: 0, keysUsed: new Set(),
+      deletes: 0, keysCreated: 0, ai: 0, failures: 0, ips: new Set(), last: "" };
+    if (!e.email && r.email) e.email = r.email;
+    if (r.source === "audit trail") { e.actions++; if (/delete/i.test(r.action)) e.deletes++; }
+    if (r.via === "API key" && r.source === "audit trail") { e.viaKey++; if (r.via_key) e.keysUsed.add(r.via_key); }
+    if (r.action === "api-key.created") e.keysCreated++;
+    if (r.source === "AI history") e.ai++;
+    if (/failed/.test(r.action)) e.failures++;
+    if (r.ip) e.ips.add(r.ip);
+    if (r.time && r.time > e.last) e.last = r.time;
+    rows.set(r.person, e);
+  }
+  const list = [...rows.values()].sort((a, b) => b.actions - a.actions || b.last.localeCompare(a.last));
+  if (!list.length) return h("div", { class: "none" }, "No activity for the current filters.");
+  const cols = [["person", "Person"], ["email", "Email"], ["type", "Type"], ["actions", "Actions"], ["viaKey", "…via API key"], ["keysUsed", "Keys used"],
+    ["deletes", "Deletes"], ["keysCreated", "Keys created"], ["ai", "AI runs"], ["failures", "Failed sign-ins"], ["ips", "IPs"], ["last", "Last activity"]];
   return h("div", { class: "table-wrap" }, h("table", {},
     h("thead", {}, h("tr", {}, cols.map(([, l]) => h("th", {}, l)))),
-    h("tbody", {}, list.map((e) => h("tr", { onclick: () => { filterUser(e.user); render(); }, title: `Filter everything to ${e.user}` },
+    h("tbody", {}, list.map((e) => h("tr", { onclick: () => { filterUser(e.person); goTab("activity"); }, title: `Everything ${e.person} did` },
       cols.map(([c]) => {
-        const v = c === "ips" ? e.ips.size : e[c];
+        const v = e[c] instanceof Set ? e[c].size : e[c];
         const num = typeof v === "number";
-        return h("td", { class: num ? "num" : "" }, c === "last" ? shortTime(v) : num ? fmt(v) : (c === "enabled" && v === "false" ? h("span", { class: "flag" }, "disabled") : v));
+        return h("td", { class: num ? "num" : "" }, c === "last" ? shortTime(v) : num ? fmt(v) : v);
       })))),
   ));
 }
@@ -503,6 +595,7 @@ function cell(col, v) {
   if (JSON_COLS.has(col) && (text === "{}" || text === "[]")) text = "";
   const cls = [MONO_COLS.has(col) || JSON_COLS.has(col) ? "mono" : ""].join(" ");
   if (col === "error" && text) return h("td", { title: text }, h("span", { class: "flag" }, text));
+  if (CONFIDENCE_COLS.has(col) && text) return h("td", {}, h("span", { class: `conf conf-${text}` }, text));
   if (col === "user_enabled" && text === "false") return h("td", {}, h("span", { class: "flag" }, "disabled"));
   return h("td", { class: cls, title: text.length > 40 ? text.slice(0, 500) : null }, text);
 }
@@ -539,11 +632,15 @@ function renderGrouped(key, rows) {
 function renderChart(key, rows) {
   const ds = DATASETS[key];
   const counts = new Map();
-  let min = Infinity, max = -Infinity;
+  let min = Infinity, max = -Infinity, outside = 0;
+  // keep the axis to the fetched window: e.g. API keys created months earlier would squash it
+  const winFrom = state.report?.from ? Math.floor(Date.parse(state.report.from) / DAY) : -Infinity;
+  const winTo = state.report?.to ? Math.floor(Date.parse(state.report.to) / DAY) : Infinity;
   for (const r of rows) {
     const t = rowTime(r, key);
     if (Number.isNaN(t)) continue;
     const day = Math.floor(t / DAY);
+    if (day < winFrom || day > winTo) { outside++; continue; }
     counts.set(day, (counts.get(day) || 0) + 1);
     if (day < min) min = day;
     if (day > max) max = day;
@@ -552,7 +649,8 @@ function renderChart(key, rows) {
   const title = h("div", { class: "chart-title" }, h("span", {}, `${DATASETS[key].label} per day (by ${pretty(ds.time).toLowerCase()}, UTC)`),
     state.global.from || state.global.to ? h("button", { class: "more", onclick: () => { state.global.from = state.global.to = ""; syncGlobalInputs(); render(); } }, "reset time zoom") : h("span", { class: "muted" }, "click a bar to zoom to that day"));
   card.append(title);
-  if (!counts.size) { card.append(h("div", { class: "none" }, "No dated rows.")); return card; }
+  if (!counts.size) { card.append(h("div", { class: "none" }, outside ? `${fmt(outside)} rows fall outside the fetched time range.` : "No dated rows.")); return card; }
+  if (outside) title.firstChild.append(h("span", { class: "muted" }, ` · ${fmt(outside)} rows outside the fetched range not charted`));
 
   const days = [];
   for (let d = min; d <= max; d++) days.push([d, counts.get(d) || 0]);
@@ -611,16 +709,23 @@ function openDrawer(key, row) {
   const ds = DATASETS[key];
   $("#drawerTitle").textContent = `${ds.label} — details`;
   const kv = h("div", { class: "kv" });
+  let personButtons = false;
   for (const c of ds.columns) {
     const v = row[c];
     const actions = [];
-    if (ds.userCols.includes(c) && v) actions.push(["Filter to this user", () => { filterUser(v); render(); }],
-      ["Exclude user", () => { filterUser(`!${v}`); render(); }]);
+    if (ds.userCols.includes(c) && v && !personButtons && (personButtons = true)) actions.push(["Everything this person did", () => { filterUser(v); closeDrawer(); goTab("activity"); }],
+      ["Filter to this person", () => { filterUser(v); render(); }], ["Exclude", () => { filterUser(`!${v}`); render(); }]);
+    if ((c === "via_key" || c === "triggered_via_key") && v && state.data.audit_trail) {
+      actions.push(["All actions with this key", () => { resetTab("audit_trail"); tabState("audit_trail").colFilters.via_key = `=${v}`; closeDrawer(); goTab("audit_trail"); }]);
+    }
     if (ds.ipCols.includes(c) && v) actions.push(["Filter to this IP", () => { state.global.ips = [String(v)]; syncGlobalInputs(); render(); }],
       ["Exclude IP", () => { state.global.ips.push(`!${v}`); syncGlobalInputs(); render(); }]);
     if (ds.facets.includes(c) && !ds.userCols.includes(c) && !ds.ipCols.includes(c) && v !== "") {
       const f = (tabState(key).facets[c] ||= { inc: [], exc: [] });
       actions.push(["Only this", () => { f.inc = [String(v)]; f.exc = []; render(); }], ["Exclude", () => { f.exc.push(String(v)); render(); }]);
+    }
+    if (c === "api_key_session_id" && v && state.data.audit_trail) {
+      actions.push(["Actions done with this key", () => { resetTab("audit_trail"); tabState("audit_trail").colFilters.via_key = `=${v}`; closeDrawer(); goTab("audit_trail"); }]);
     }
     if ((c === "api_key_session_id" || c === "session_id") && v && state.data.api_key_usage) {
       actions.push(["All uses of this key", () => { resetTab("api_key_usage"); tabState("api_key_usage").colFilters.api_key_session_id = `=${v}`; closeDrawer(); goTab("api_key_usage"); }]);
@@ -679,7 +784,7 @@ function goTab(t) { state.tab = t; closeDrawer(); render(); window.scrollTo({ to
 
 function fillSuggestions() {
   const users = new Set(), ips = new Set();
-  for (const u of state.users) { if (u.username) users.add(u.username); if (u.email) users.add(u.email); }
+  for (const u of state.users) { if (u.name) users.add(u.name); if (u.email) users.add(u.email); }
   for (const [k, ds] of Object.entries(DATASETS)) for (const r of state.data?.[k] || []) {
     for (const c of ds.userCols.slice(0, 1)) if (r[c]) users.add(r[c]);
     for (const c of ds.ipCols) if (r[c]) ips.add(r[c]);
