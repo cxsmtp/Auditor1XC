@@ -1,0 +1,13 @@
+{
+  "name": "auditor1xc",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Checkmarx One audit log and API key auditor (local GUI + CLI)",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node cx_auditor_gui.mjs",
+    "cli": "node cx_auditor.mjs",
+    "test": "node --test tests/cx_auditor.test.mjs tests/gui_server.test.mjs"
+  }
+}

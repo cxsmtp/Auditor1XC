@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="session-token" content="__SESSION_TOKEN__">
+  <title>Checkmarx One Auditor</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2 3 6v6c0 5 3.8 9.7 9 10 5.2-.3 9-5 9-10V6l-9-4Zm-1.2 14.2-3.5-3.5 1.4-1.4 2.1 2.1 4.9-4.9 1.4 1.4-6.3 6.3Z"/></svg>
+      <span>Checkmarx One Auditor</span>
+      <span id="tenantBadge" class="badge" hidden></span>
+    </div>
+    <div class="topbar-actions">
+      <button id="saveDataBtn" class="btn ghost" disabled title="Download the fetched data (no API key) to reopen later">Save data</button>
+      <label class="btn ghost" title="Open a previously saved data file">Open data<input id="loadDataInput" type="file" accept=".json,application/json" hidden></label>
+      <button id="themeBtn" class="btn ghost" title="Toggle light/dark">Theme</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ------------------------------------------------ connect & fetch -->
+    <details id="connectCard" class="card" open>
+      <summary><span class="step">1</span> Connect &amp; fetch <span id="connectSummary" class="muted"></span></summary>
+      <div class="connect-grid">
+        <div class="field span2">
+          <label for="apiKey">Checkmarx One API key</label>
+          <div class="input-row">
+            <input id="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="Paste your API key (eyJ...)">
+            <button id="toggleKey" class="btn ghost" type="button">Show</button>
+          </div>
+          <div id="keyInfo" class="hint">The key stays on this computer: it goes only to this local app, which sends it to your Checkmarx One IAM to sign in. It is never saved.</div>
+        </div>
+
+        <div class="field span2">
+          <label>Time range</label>
+          <div class="chips" id="rangePresets">
+            <button class="chip" data-days="1">24 h</button>
+            <button class="chip" data-days="7">7 days</button>
+            <button class="chip active" data-days="30">30 days</button>
+            <button class="chip" data-days="90">90 days</button>
+            <button class="chip" data-days="365">365 days</button>
+          </div>
+          <div class="input-row">
+            <label class="inline">From <input id="fromInput" type="datetime-local"></label>
+            <label class="inline">To <input id="toInput" type="datetime-local"></label>
+          </div>
+        </div>
+
+        <fieldset class="field span2">
+          <legend>Data to fetch</legend>
+          <div class="checks">
+            <label><input type="checkbox" name="section" value="audit" checked> Audit trail <span class="muted">user actions</span></label>
+            <label><input type="checkbox" name="section" value="keys" checked> API keys <span class="muted">who created which key</span></label>
+            <label><input type="checkbox" name="section" value="usage" checked> API key usage <span class="muted">who used which key, from where</span></label>
+            <label><input type="checkbox" name="section" value="admin" checked> IAM admin events <span class="muted">user/role changes</span></label>
+            <label><input type="checkbox" name="section" value="events" checked> IAM user events <span class="muted">logins, failures</span></label>
+          </div>
+        </fieldset>
+
+        <details class="advanced span2">
+          <summary>Advanced options</summary>
+          <div class="adv-grid">
+            <label class="field">Only check API keys of these users <input id="keyUserScope" placeholder="e.g. alice, *@corp.com (blank = all users)"></label>
+            <label class="check"><input id="legacyAudit" type="checkbox"> Also read legacy audit trail (events before 29 Mar 2026)</label>
+            <label class="field">API URL override <input id="astUrl" placeholder="derived from key, e.g. https://eu.ast.checkmarx.net"></label>
+            <label class="field">IAM URL override <input id="iamUrl" placeholder="derived from key, e.g. https://eu.iam.checkmarx.net"></label>
+            <label class="field">Tenant override <input id="tenant" placeholder="derived from key"></label>
+          </div>
+        </details>
+
+        <div class="span2 actions">
+          <button id="fetchBtn" class="btn primary">Fetch logs</button>
+          <button id="cancelBtn" class="btn" hidden>Cancel</button>
+          <span id="fetchStatus" class="muted" role="status"></span>
+        </div>
+        <pre id="progressLog" class="log span2" hidden></pre>
+      </div>
+    </details>
+
+    <!-- ------------------------------------------------ workspace -->
+    <section id="workspace" hidden>
+      <div class="card filters" aria-label="Global filters">
+        <div class="filters-head">
+          <span class="step">2</span> <strong>Filters</strong>
+          <span class="muted">apply to every tab · values in one box are OR · boxes are AND · <code>*</code> <code>?</code> wildcards · <code>!</code> excludes</span>
+          <span class="spacer"></span>
+          <select id="viewsSelect" aria-label="Saved views"><option value="">Saved views…</option></select>
+          <button id="saveViewBtn" class="btn ghost">Save view</button>
+          <button id="deleteViewBtn" class="btn ghost" hidden>Delete view</button>
+          <button id="clearFiltersBtn" class="btn ghost">Clear all</button>
+        </div>
+        <div class="filters-grid">
+          <div class="field">
+            <label for="userInput">Users <span class="muted">(username, email or id)</span></label>
+            <div class="tokens" id="userTokens"><input id="userInput" list="userList" placeholder="type and press Enter"></div>
+            <datalist id="userList"></datalist>
+          </div>
+          <div class="field">
+            <label for="ipInput">IP addresses</label>
+            <div class="tokens" id="ipTokens"><input id="ipInput" list="ipList" placeholder="e.g. 10.20.*  or  !10.0.0.1"></div>
+            <datalist id="ipList"></datalist>
+          </div>
+          <div class="field">
+            <label for="textInput">Search text <span class="muted">(anywhere, incl. event data)</span></label>
+            <input id="textInput" type="search" placeholder="e.g. payments-api, !scan">
+          </div>
+          <div class="field wide">
+            <label>Within time</label>
+            <div class="input-row">
+              <input id="gFrom" type="datetime-local" aria-label="Filter from">
+              <input id="gTo" type="datetime-local" aria-label="Filter to">
+            </div>
+          </div>
+          <label class="check"><input id="errorsOnly" type="checkbox"> Errors / failures only</label>
+        </div>
+      </div>
+
+      <nav class="tabs" id="tabs" role="tablist"></nav>
+      <div id="tabPanel"></div>
+    </section>
+
+    <section id="emptyState" class="card empty">
+      <h2>Audit your Checkmarx One tenant</h2>
+      <p>Paste an API key above and press <b>Fetch logs</b>. Then search the audit trail, see which user created each API key, and who used it and from where.</p>
+      <p class="muted">Or use <b>Open data</b> to reopen a file you saved earlier. You can do that without an API key.</p>
+    </section>
+  </main>
+
+  <aside id="drawer" class="drawer" hidden aria-label="Row details">
+    <div class="drawer-head">
+      <strong id="drawerTitle">Details</strong>
+      <button id="drawerClose" class="btn ghost icon" aria-label="Close details">✕</button>
+    </div>
+    <div id="drawerBody"></div>
+  </aside>
+  <div id="tooltip" class="tooltip" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

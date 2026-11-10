@@ -156,10 +156,12 @@ class CxClient {
 }
 
 // ---------------------------------------------------------------- reports --
-async function buildApiKeyInventory(client, users) {
+async function buildApiKeyInventory(client, users, onProgress = () => {}) {
   const cid = await client.clientUuid(API_KEY_CLIENT_ID);
   const rows = [];
+  let done = 0;
   for (const u of users) {
+    onProgress(++done, users.length);
     const sessions = cid ? await client.offlineSessions(u.id, cid) : [];
     const consent = (await client.consents(u.id)).find((c) => c.clientId === API_KEY_CLIENT_ID);
     const grantCreated = consent ? msToIso(consent.createdDate) : "";
@@ -296,6 +298,91 @@ function writeCsv(file, rows) {
   fs.writeFileSync(file, lines.join("\r\n") + "\r\n", "utf8");
 }
 
+/**
+ * Fetch everything for a window. Shared by the CLI and the GUI.
+ * opts: {apiKey, iamUrl?, tenant?, astUrl?, start: Date, end: Date,
+ *        sections: Set<"audit"|"admin"|"events"|"keys"|"usage">, legacyAudit?, keyUserScope?(user)=>bool}
+ * progress(msg) is called with human-readable status lines.
+ * Returns {report, users, raw, datasets} where datasets holds flattened rows keyed by
+ * audit_trail, iam_admin_events, iam_user_events, api_keys, api_key_usage (only requested ones).
+ */
+export async function collect(opts, progress = () => {}) {
+  const { apiKey, start, end, legacyAudit = false, keyUserScope } = opts;
+  const sections = new Set(opts.sections || SECTIONS);
+  let { iamUrl, tenant, astUrl } = opts;
+  if (!(iamUrl && tenant && astUrl)) {
+    const d = deriveEndpoints(apiKey);
+    iamUrl ||= d.iamUrl; tenant ||= d.tenant; astUrl ||= d.astUrl;
+  }
+  progress(`tenant=${tenant}  iam=${iamUrl}  api=${astUrl}`);
+  progress(`window ${start.toISOString()} -> ${end.toISOString()}`);
+
+  const client = new CxClient({ apiKey, iamUrl, tenant, astUrl });
+  await client.authenticate();
+  progress("authenticated");
+
+  const report = { tenant, iamUrl, astUrl, from: start.toISOString(), to: end.toISOString(),
+    fetchedAt: new Date().toISOString(), sections: {} };
+  const section = async (name, fn) => {
+    progress(`- ${name} ...`);
+    try {
+      const r = await fn();
+      report.sections[name] = { status: "ok", fetched: r.length };
+      progress(`  ${name}: ${r.length} records`);
+      return r;
+    } catch (e) {
+      if (!(e instanceof HttpError)) throw e;
+      const hint = [401, 403].includes(e.status) ? " (API key owner lacks permission)" : "";
+      report.sections[name] = { status: `failed: HTTP ${e.status}${hint}` };
+      progress(`  ! ${name} skipped: ${e.message}${hint}`);
+      return [];
+    }
+  };
+
+  const users = await section("users", () => client.users());
+  const usersById = Object.fromEntries(users.map((u) => [u.id, u.username || ""]));
+
+  let audit = [], adminEv = [], userEv = [], keys = [];
+  if (sections.has("audit")) {
+    audit = await section("audit_trail", async () => {
+      let events = [];
+      let legacy = legacyAudit;
+      try {
+        events = (await client.auditEvents(start, end)).map((e) => ({ ...e, _source: "audit-events" }));
+      } catch (e) {
+        if (!(e instanceof HttpError) || e.status !== 404) throw e;
+        progress("  /api/audit-events not available on this tenant; using legacy /api/audit");
+        legacy = true;
+      }
+      if (legacy) {
+        const seen = new Set(events.map((e) => e.eventID).filter(Boolean));
+        for (const e of await client.auditLegacy(start, end))
+          if (!e.eventID || !seen.has(e.eventID)) events.push({ ...e, _source: "audit-legacy" });
+      }
+      return events.sort((x, y) => String(x.eventDate || "").localeCompare(String(y.eventDate || "")));
+    });
+  }
+  if (sections.has("admin")) adminEv = await section("iam_admin_events", () => client.adminEvents(start, end));
+  if (sections.has("events") || sections.has("usage")) userEv = await section("iam_user_events", () => client.userEvents(start, end));
+  if ((sections.has("keys") || sections.has("usage")) && users.length) {
+    const scope = keyUserScope ? users.filter(keyUserScope) : users;
+    if (keyUserScope && !scope.length) progress("  note: no IAM user matches the user filter; API key inventory will be empty");
+    keys = await section("api_keys", () => buildApiKeyInventory(client, scope, (i, n) => {
+      if (i % 25 === 0 || i === n) progress(`  api_keys: ${i}/${n} users checked`);
+    }));
+  }
+
+  const datasets = {};
+  if (sections.has("audit")) datasets.audit_trail = audit.map((e) => flattenAudit(e, usersById));
+  if (sections.has("admin")) datasets.iam_admin_events = adminEv.map((e) => flattenAdmin(e, usersById));
+  if (sections.has("events")) datasets.iam_user_events = userEv.map((e) => flattenUser(e, usersById));
+  if (sections.has("keys")) datasets.api_keys = keys;
+  if (sections.has("usage")) datasets.api_key_usage = buildApiKeyUsage(userEv, keys, usersById);
+
+  const userList = users.map((u) => ({ id: u.id, username: u.username || "", email: u.email || "", enabled: u.enabled }));
+  return { report, users: userList, raw: { audit_trail: audit, iam_admin_events: adminEv, iam_user_events: userEv, api_keys: keys }, datasets };
+}
+
 // ------------------------------------------------------------------- main --
 const SECTIONS = ["audit", "admin", "events", "keys", "usage"];
 
@@ -366,79 +453,29 @@ export async function run(argv = process.argv.slice(2)) {
   const bad = [...only].filter((s) => !SECTIONS.includes(s));
   if (bad.length) { log(`error: unknown --only value(s): ${bad.join(", ")}`); return 2; }
 
-  let { "iam-url": iamUrl, tenant, "base-url": astUrl } = a;
-  if (!(iamUrl && tenant && astUrl)) {
-    const d = deriveEndpoints(apiKey);
-    iamUrl ||= d.iamUrl; tenant ||= d.tenant; astUrl ||= d.astUrl;
+  let collected;
+  try {
+    collected = await collect({
+      apiKey, iamUrl: a["iam-url"], tenant: a.tenant, astUrl: a["base-url"], start, end, sections: only,
+      legacyAudit: a["legacy-audit"],
+      // --user also narrows the per-user API key lookups (one IAM call pair per user otherwise)
+      keyUserScope: (u) => {
+        const f = buildFilters({ user: a.user }, []);
+        return !f.user || [u.username, u.email, u.id].some((v) => v && f.user.some((re) => re.test(v)));
+      },
+    }, log);
+  } catch (e) {
+    if (e instanceof HttpError) { log(`error: ${e.message}`); return 1; }
+    throw e;
   }
-  log(`tenant=${tenant}  iam=${iamUrl}  api=${astUrl}`);
-  log(`window ${start.toISOString()} -> ${end.toISOString()}`);
+  const { report, users, raw, datasets } = collected;
   fs.mkdirSync(a.out, { recursive: true });
-
-  const client = new CxClient({ apiKey, iamUrl, tenant, astUrl });
-  await client.authenticate();
-  log("authenticated");
-
-  const report = { tenant, from: start.toISOString(), to: end.toISOString(), sections: {}, files: {} };
-  const section = async (name, fn) => {
-    log(`- ${name} ...`);
-    try {
-      const r = await fn();
-      report.sections[name] = { status: "ok", fetched: r.length };
-      log(`  ${r.length} records`);
-      return r;
-    } catch (e) {
-      if (!(e instanceof HttpError)) throw e;
-      const hint = [401, 403].includes(e.status) ? " (API key owner lacks permission)" : "";
-      report.sections[name] = { status: `failed: HTTP ${e.status}${hint}` };
-      log(`  ! skipped: ${e.message}${hint}`);
-      return [];
-    }
-  };
-
-  // Users are needed to turn ids into names and to resolve --user values.
-  const users = await section("users", () => client.users());
-  const usersById = Object.fromEntries(users.map((u) => [u.id, u.username || ""]));
   const filters = buildFilters(a, users);
+  report.files = {};
   report.filters = Object.fromEntries(
     ["user", "ip", "event-type", "action", "resource", "key-id", "text"].filter((k) => a[k]).map((k) => [k, splitValues(a[k])]));
   if (a["errors-only"]) report.filters["errors-only"] = true;
-
-  let audit = [], adminEv = [], userEv = [], keys = [];
-  if (only.has("audit")) {
-    audit = await section("audit_trail", async () => {
-      let events = [];
-      let legacy = a["legacy-audit"];
-      try {
-        events = (await client.auditEvents(start, end)).map((e) => ({ ...e, _source: "audit-events" }));
-      } catch (e) {
-        if (!(e instanceof HttpError) || e.status !== 404) throw e;
-        log("  /api/audit-events not available on this tenant; using legacy /api/audit");
-        legacy = true;
-      }
-      if (legacy) {
-        const seen = new Set(events.map((e) => e.eventID).filter(Boolean));
-        for (const e of await client.auditLegacy(start, end))
-          if (!e.eventID || !seen.has(e.eventID)) events.push({ ...e, _source: "audit-legacy" });
-      }
-      return events.sort((x, y) => String(x.eventDate || "").localeCompare(String(y.eventDate || "")));
-    });
-  }
-  if (only.has("admin")) adminEv = await section("iam_admin_events", () => client.adminEvents(start, end));
-  if (only.has("events") || only.has("usage")) userEv = await section("iam_user_events", () => client.userEvents(start, end));
-  if ((only.has("keys") || only.has("usage")) && users.length) {
-    // With --user, only look up those users' keys (one IAM call pair per user otherwise).
-    const scope = filters.user ? users.filter((u) => [u.username, u.email, u.id].some((v) => v && filters.user.some((re) => re.test(v)))) : users;
-    if (filters.user && !scope.length) log("  note: no IAM user matches --user; API key inventory will be empty");
-    keys = await section("api_keys", () => buildApiKeyInventory(client, scope));
-  }
-
-  const outputs = {};
-  if (only.has("audit")) outputs["audit_trail.csv"] = audit.map((e) => flattenAudit(e, usersById));
-  if (only.has("admin")) outputs["iam_admin_events.csv"] = adminEv.map((e) => flattenAdmin(e, usersById));
-  if (only.has("events")) outputs["iam_user_events.csv"] = userEv.map((e) => flattenUser(e, usersById));
-  if (only.has("keys")) outputs["api_keys.csv"] = keys;
-  if (only.has("usage")) outputs["api_key_usage.csv"] = buildApiKeyUsage(userEv, keys, usersById);
+  const outputs = Object.fromEntries(Object.entries(datasets).map(([k, v]) => [`${k}.csv`, v]));
 
   for (const [name, all] of Object.entries(outputs)) {
     const { rows, applied } = applyFilters(all, filters);
@@ -461,8 +498,7 @@ export async function run(argv = process.argv.slice(2)) {
   for (const s of Object.values(perUser)) if (s.api_key_ips) s.api_key_ips = [...s.api_key_ips].sort();
   report.per_user = perUser;
 
-  fs.writeFileSync(path.join(a.out, "raw.json"), JSON.stringify(
-    { audit_trail: audit, iam_admin_events: adminEv, iam_user_events: userEv, api_keys: keys }, null, 2));
+  fs.writeFileSync(path.join(a.out, "raw.json"), JSON.stringify(raw, null, 2));
   fs.writeFileSync(path.join(a.out, "summary.json"), JSON.stringify(report, null, 2));
   log(`done -> ${path.resolve(a.out)}`);
   return 0;

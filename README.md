@@ -1,11 +1,54 @@
 # Auditor1XC
 
-Export and search Checkmarx One audit logs, API keys, and API key usage using a single API key.
+Search Checkmarx One audit logs, API keys, and API key usage using a single API key.
+It needs **Node.js 18+** and nothing from npm.
 
-`cx_auditor.mjs` is a single file. It needs **Node.js 18+** and nothing from npm.
+## GUI (recommended)
+
+```bash
+node cx_auditor_gui.mjs
+```
+
+or `npm start`. This opens `http://127.0.0.1:8787` in your browser. If that port is taken, it picks
+a free one and prints the URL. Use `--port 9000` to choose a port and `--no-open` to skip opening
+the browser. Stop it with Ctrl+C.
+
+**1. Connect & fetch.**
+* Paste the API key. The page shows which tenant and region the key belongs to, and warns if the key has expired.
+* Pick a time range: 24 h, 7, 30, 90 or 365 days, or exact dates.
+* Choose which data to fetch: audit trail, API keys, key usage, IAM admin events, IAM user events.
+* Press **Fetch logs**. Progress is shown live, and **Cancel** stops the fetch.
+* Advanced options: limit the API-key lookup to some users (faster on large tenants), include the legacy audit trail, or override the URLs and tenant.
+
+**2. Work on the logs.** You fetch once, then every option below works instantly on that data.
+
+| Feature | What it does |
+|---|---|
+| **Overview** | Count tiles per data set. **Things worth reviewing**: a key used from several IPs, keys of disabled users, keys unused for 90+ days, one IP failing sign-in for many users, users with repeated failed sign-ins, access-control changes, and deletions. Each one opens the matching rows. A **per-user summary** lists audit actions, deletes, API keys, key uses, key IPs, failed sign-ins and last activity. |
+| **Global filters** (all tabs) | Users (username, email or ID, with suggestions), IPs, free text (searches event data too), a time window, and errors only. `,` = OR, filters combine with AND, `*` `?` are wildcards, and `!` excludes (e.g. `!10.0.*`). |
+| **Facets** (left side of each tab) | Top values with counts for event type, action, resource, user, IP and so on. Click a value to include it, or ⊘ to exclude it. Several values can be combined. |
+| **Column filters** | A filter box under every column header: contains, `=` exact, `!` exclude, wildcards. |
+| **Sort / columns / paging** | Click a header to sort. Show or hide columns. 50 to 1000 rows per page. |
+| **Group by** | Any column becomes a summary: row count, distinct users, distinct IPs, first and last seen. Click a group to see its rows. |
+| **Activity chart** | Rows per day for the current filters. Hover for counts. Click a bar to zoom to that day. |
+| **Row details** | Click a row to see every field, with event data shown as formatted JSON. One-click "filter to this user / IP", "exclude", "all uses of this key", and "copy as JSON". |
+| **Saved views** | Save your filters, sorting and columns under a name. Views are stored in your browser and never include the data or the key. |
+| **Export** | CSV or JSON of exactly the rows you are looking at. |
+| **Save data / Open data** | Download the fetched data (without the key) and reopen it later, with no API key or network needed. |
+| **Light / dark theme** | Follows your OS setting, or use the Theme button. |
+
+**Security of the local app.** It listens only on `127.0.0.1` and rejects requests for any other
+host name. Its API needs a random token that is created each time it starts and only the page
+knows. The key is used only for the request and is never written to disk or logged; errors are
+scrubbed of anything that looks like a token. "Save data" files contain no key, but they do
+contain your audit data, so store them accordingly.
+
+## Command line
+
+`cx_auditor.mjs` does the same fetch for scripting, writing CSV and JSON files.
 (`cx_auditor.py` is the original Python version. It exports the same data but has no search options.)
 
-## Quick start
+### Quick start
 
 ```bash
 export CX_APIKEY='eyJhbGciOi...'
@@ -24,7 +67,7 @@ node cx_auditor.mjs --help
 The tenant, IAM URL and API URL are read from the key's `iss` claim. Override them with
 `--tenant`, `--iam-url` and `--base-url` if needed.
 
-## Outputs (in `--out`, default `./audit-out`)
+### Outputs (in `--out`, default `./audit-out`)
 
 | File | Answers | Source |
 |---|---|---|
@@ -36,7 +79,7 @@ The tenant, IAM URL and API URL are read from the key's `iss` claim. Override th
 | `summary.json` | Window, filters, rows fetched/matched per file, per-user rollup | |
 | `raw.json` | Unfiltered API responses | |
 
-## Searching
+### Searching (CLI)
 
 Rules:
 
@@ -132,7 +175,7 @@ identity coming from an unfamiliar IP**. Look at `api_key_ips` per user in `summ
 ## Tests
 
 ```bash
-node --test tests/cx_auditor.test.mjs
+npm test
 ```
 
 ```bash
